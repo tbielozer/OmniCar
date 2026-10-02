@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>ESP32 Robot Joystick</title>
+
+  <style>
+    body {
+      margin: 0;
+      background: #202124;
+      color: white;
+      font-family: Arial, sans-serif;
+      text-align: center;
+      touch-action: none;
+    }
+
+    h1 {
+      margin-top: 25px;
+    }
+
+    #status {
+      margin: 15px;
+      color: #ff5555;
+    }
+
+    canvas {
+      background: #333;
+      border: 3px solid white;
+      border-radius: 50%;
+      touch-action: none;
+    }
+  </style>
+</head>
+
+<body>
+
+  <h1>Robot Joystick</h1>
+  <div id="status">Connecting...</div>
+
+  <canvas id="joystick" width="300" height="300"></canvas>
+
+  <script>
+    // Replace this with the IP printed by the ESP32
+    const ESP32_IP = "192.168.4.1";
+
+    const socket = new WebSocket(`ws://${ESP32_IP}:82`);
+
+    const status = document.getElementById("status");
+    const canvas = document.getElementById("joystick");
+    const ctx = canvas.getContext("2d");
+
+    const centerX = canvas.width / 2;
+    const centerY = canvas.height / 2;
+    const maxDistance = 100;
+    const knobRadius = 35;
+
+    let right = 0.0;
+    let forward = 0.0;
+    let joystickActive = false;
+
+    socket.onopen = function() {
+      status.textContent = "Connected";
+      status.style.color = "#55ff55";
+    };
+
+    socket.onclose = function() {
+      status.textContent = "Disconnected";
+      status.style.color = "#ff5555";
+    };
+
+    socket.onerror = function() {
+      status.textContent = "Connection error";
+      status.style.color = "#ff5555";
+    };
+
+    function drawJoystick() {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      // Outer joystick area
+      ctx.beginPath();
+      ctx.arc(centerX, centerY, maxDistance, 0, Math.PI * 2);
+      ctx.strokeStyle = "white";
+      ctx.lineWidth = 3;
+      ctx.stroke();
+
+      // Position of knob
+      const knobX = centerX + right * maxDistance;
+      const knobY = centerY - forward * maxDistance;
+
+      // Knob
+      ctx.beginPath();
+      ctx.arc(knobX, knobY, knobRadius, 0, Math.PI * 2);
+      ctx.fillStyle = "#4285f4";
+      ctx.fill();
+    }
+
+    function updateJoystick(event) {
+      const rect = canvas.getBoundingClientRect();
+
+      let mouseX = event.clientX - rect.left;
+      let mouseY = event.clientY - rect.top;
+
+      let dx = mouseX - centerX;
+      let dy = mouseY - centerY;
+
+      const distance = Math.sqrt(dx * dx + dy * dy);
+
+      if (distance > maxDistance) {
+        dx = dx / distance * maxDistance;
+        dy = dy / distance * maxDistance;
+      }
+
+      // Horizontal movement: right is positive
+      right = dx / maxDistance;
+
+      // Screen Y is reversed: up means forward
+      forward = -dy / maxDistance;
+
+      drawJoystick();
+    }
+
+    function stopJoystick() {
+      joystickActive = false;
+      right = 0.0;
+      forward = 0.0;
+      drawJoystick();
+    }
+
+    canvas.addEventListener("pointerdown", function(event) {
+      joystickActive = true;
+      canvas.setPointerCapture(event.pointerId);
+      updateJoystick(event);
+    });
+
+    canvas.addEventListener("pointermove", function(event) {
+      if (joystickActive) {
+        updateJoystick(event);
+      }
+    });
+
+    canvas.addEventListener("pointerup", stopJoystick);
+    canvas.addEventListener("pointercancel", stopJoystick);
+
+    // Send right,forward every 50 milliseconds
+    setInterval(function() {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(`${right.toFixed(3)},${forward.toFixed(3)}`);
+      }
+    }, 50);
+
+    drawJoystick();
+  </script>
+
+</body>
+</html>
