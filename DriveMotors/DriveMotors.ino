@@ -1,116 +1,161 @@
-// Define your two control pins
-#define MOTOR1_PWM 32 // Must be a PWM pin (~ on the Arduino)
-#define MOTOR1_REV 33 // Can be any digital pin
+#define MOTOR1_PWM 32
+#define MOTOR1_REV 33
 #define MOTOR2_PWM 25
 #define MOTOR2_REV 26
-#define MOTOR3_PWM 27
-#define MOTOR3_REV 14
+#define MOTOR3_PWM 19
+#define MOTOR3_REV 18
 
+#define ENC1_A 35
+#define ENC1_B 34
+#define ENC2_A 14
+#define ENC2_B 27
+#define ENC3_A 17
+#define ENC3_B 16
 
-void setup() {
+volatile long encoder1Count = 0;
+volatile long encoder2Count = 0;
+volatile long encoder3Count = 0;
+
+void IRAM_ATTR encoder1ISR()
+{
+  bool a = digitalRead(ENC1_A);
+  bool b = digitalRead(ENC1_B);
+  encoder1Count += (a == b) ? 1 : -1;
+}
+
+void IRAM_ATTR encoder2ISR()
+{
+  bool a = digitalRead(ENC2_A);
+  bool b = digitalRead(ENC2_B);
+  encoder2Count += (a == b) ? 1 : -1;
+}
+
+void IRAM_ATTR encoder3ISR()
+{
+  bool a = digitalRead(ENC3_A);
+  bool b = digitalRead(ENC3_B);
+  encoder3Count += (a == b) ? 1 : -1;
+}
+
+void setMotor(int pwm, int rev, int command)
+{
+  command = constrain(command, -255, 255);
+
+  if (command >= 0) {
+    digitalWrite(rev, LOW);
+    analogWrite(pwm, command);
+  } else {
+    digitalWrite(rev, HIGH);
+    analogWrite(pwm, 255 - abs(command));
+  }
+}
+
+void stopAllMotors()
+{
+  setMotor(MOTOR1_PWM, MOTOR1_REV, 0);
+  setMotor(MOTOR2_PWM, MOTOR2_REV, 0);
+  setMotor(MOTOR3_PWM, MOTOR3_REV, 0);
+}
+
+void resetEncoderCounts()
+{
+  noInterrupts();
+  encoder1Count = 0;
+  encoder2Count = 0;
+  encoder3Count = 0;
+  interrupts();
+}
+
+void readEncoderCounts(long &c1, long &c2, long &c3)
+{
+  noInterrupts();
+  c1 = encoder1Count;
+  c2 = encoder2Count;
+  c3 = encoder3Count;
+  interrupts();
+}
+
+void runTopSpeedTest()
+{
+  Serial.println("Starting motors...");
+
+  // Run all motors at full speed in the positive direction
+  setMotor(MOTOR1_PWM, MOTOR1_REV, 255);
+  setMotor(MOTOR2_PWM, MOTOR2_REV, 255);
+  setMotor(MOTOR3_PWM, MOTOR3_REV, 255);
+
+  // Allow motors to reach steady speed
+  delay(1000);
+
+  resetEncoderCounts();
+
+  unsigned long startTime = millis();
+  const unsigned long testTime = 2000;
+
+  while (millis() - startTime < testTime) {
+    delay(1);
+  }
+
+  unsigned long elapsed = millis() - startTime;
+
+  stopAllMotors();
+
+  long c1, c2, c3;
+  readEncoderCounts(c1, c2, c3);
+
+  float seconds = elapsed / 1000.0;
+
+  Serial.println();
+  Serial.println("Top-speed results:");
+
+  Serial.print("Motor 1: ");
+  Serial.print(abs(c1));
+  Serial.print(" counts, ");
+  Serial.print(abs(c1) / seconds);
+  Serial.println(" counts/second");
+
+  Serial.print("Motor 2: ");
+  Serial.print(abs(c2));
+  Serial.print(" counts, ");
+  Serial.print(abs(c2) / seconds);
+  Serial.println(" counts/second");
+
+  Serial.print("Motor 3: ");
+  Serial.print(abs(c3));
+  Serial.print(" counts, ");
+  Serial.print(abs(c3) / seconds);
+  Serial.println(" counts/second");
+}
+
+void setup()
+{
+  Serial.begin(115200);
+
   pinMode(MOTOR1_PWM, OUTPUT);
   pinMode(MOTOR1_REV, OUTPUT);
   pinMode(MOTOR2_PWM, OUTPUT);
   pinMode(MOTOR2_REV, OUTPUT);
   pinMode(MOTOR3_PWM, OUTPUT);
   pinMode(MOTOR3_REV, OUTPUT);
-  Serial.begin(9600); 
+
+  pinMode(ENC1_A, INPUT);
+  pinMode(ENC1_B, INPUT);
+  pinMode(ENC2_A, INPUT);
+  pinMode(ENC2_B, INPUT);
+  pinMode(ENC3_A, INPUT);
+  pinMode(ENC3_B, INPUT);
+
+  attachInterrupt(digitalPinToInterrupt(ENC1_A), encoder1ISR, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(ENC2_A), encoder2ISR, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(ENC3_A), encoder3ISR, CHANGE);
+
+  stopAllMotors();
+
+  delay(2000);
+  runTopSpeedTest();
 }
 
-void driveInward(int pwm, int rev, int speed)
+void loop()
 {
-  digitalWrite(rev, LOW);
-  analogWrite(pwm, speed);
-}
-
-void driveOutward(int pwm, int rev, int speed)
-{
-  int speed_rev = 255-speed;
-  digitalWrite(rev, HIGH);
-  analogWrite(pwm, speed_rev);
-}
-
-void stop(int pwm, int rev)
-{
-  analogWrite(pwm, 0);
-  digitalWrite(rev, LOW);
-}
-
-void setMotor(int pwm, int rev, int command)
-{
-  command = constrain(command, -255, 255);
-  if (command > 0) {
-    driveInward(pwm, rev, command);
-  }
-  else if (command < 0) {
-    driveOutward(pwm, rev, -command);
-  }
-  else {
-    stop(pwm, rev);
-  }
-}
-
-
-void driveRobot(float forward, float right)
-{
-  float motor1 = -forward;
-  float motor2 =  0.5 * forward - 0.8660254 * right;
-  float motor3 =  0.5 * forward + 0.8660254 * right;
-
-  // Keep all commands within -1.0 to 1.0
-  float maximum = max(abs(motor1), max(abs(motor2), abs(motor3)));
-
-  if (maximum > 1.0) {
-    motor1 /= maximum;
-    motor2 /= maximum;
-    motor3 /= maximum;
-  }
-
-  setMotor(MOTOR1_PWM, MOTOR1_REV, motor1 * 255);
-  setMotor(MOTOR2_PWM, MOTOR2_REV, motor2 * 255);
-  setMotor(MOTOR3_PWM, MOTOR3_REV, motor3 * 255);
-}
-
-
-// int loop_test = 130;
-void loop() {
-//   if (loop_test < 255)
-//   {
-//     loop_test = loop_test + 5;
-//   }
-//   else
-//   {
-//     loop_test=130;
-//   }
-//   Serial.println(loop_test);
-
-  // // 1. Move Forward at roughly 70% speed (180 out of 255)
-  // driveInward(MOTOR1_PWM, MOTOR1_REV, 180);
-  // driveInward(MOTOR2_PWM, MOTOR2_REV, 180);
-  // driveInward(MOTOR3_PWM, MOTOR3_REV, 180);
-  // delay(3000);
-
-  // // // Stop the motor
-  // stop(MOTOR1_PWM, MOTOR1_REV);
-  // stop(MOTOR2_PWM, MOTOR2_REV);
-  // stop(MOTOR3_PWM, MOTOR3_REV);
-  // delay(1000);
-
-  // // 2. Move Backward at roughly 70% speed 
-  // // Since MOTOR1_REV is HIGH, we invert the PWM value: 255 - 180 = 75
-  // driveOutward(MOTOR1_PWM, MOTOR1_REV, 180); 
-  // driveOutward(MOTOR2_PWM, MOTOR2_REV, 180); 
-  // driveOutward(MOTOR3_PWM, MOTOR3_REV, 180);
-  // delay(3000);
-
-  // // // Stop the motor
-  // stop(MOTOR1_PWM, MOTOR1_REV);
-  // stop(MOTOR2_PWM, MOTOR2_REV);
-  // stop(MOTOR3_PWM, MOTOR3_REV);
-  // delay(1000);
-  // delay(1000);
-  driveRobot(0.5, 0.5);
-  delay(3000);
-  driveRobot(0,0);
-  delay(1000);
+  // Test runs once in setup()
 }
